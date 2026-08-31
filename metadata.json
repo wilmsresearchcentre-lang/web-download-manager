@@ -1,0 +1,6 @@
+{
+  "name": "Web Download Manager",
+  "description": "Fast multi-thread web download manager, media stream link inspector, and browser extension suite.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
