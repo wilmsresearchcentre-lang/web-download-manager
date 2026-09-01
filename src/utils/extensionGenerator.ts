@@ -635,7 +635,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const isYouTube = window.location.hostname.includes("youtube.com") || window.location.hostname.includes("youtu.be");
     const isAudio = format === "mp3" || format === "m4a" || quality.includes("Audio") || quality.includes("320k");
     const realTitle = resolveBestPageTitle(filename.replace(/\.[^.]+$/, ''));
-    const finalFilename = sanitizeDownloadTitle(filename, realTitle) + (filename.includes('.') ? '' : `.${format || 'mp4'}`);
+    const finalFilename = sanitizeDownloadTitle(filename, realTitle) + (filename.includes('.') ? '' : '.' + (format || 'mp4'));
 
     const preset = QUALITY_STREAM_PRESETS[quality] || (isAudio ? QUALITY_STREAM_PRESETS["Audio_320kbps"] : QUALITY_STREAM_PRESETS["1080p_FHD"]);
     let directStreamUrl = preset.url;
