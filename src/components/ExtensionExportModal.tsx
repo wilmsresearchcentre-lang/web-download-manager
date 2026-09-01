@@ -27,14 +27,15 @@ export const ExtensionExportModal: React.FC<ExtensionExportModalProps> = ({ onCl
   const [copiedBookmarklet, setCopiedBookmarklet] = useState(false);
   const [isDownloadingZip, setIsDownloadingZip] = useState(false);
 
-  const files = getExtensionFiles(window.location.origin);
+  const appBaseUrl = 'https://web-download-manager-production-18d1.up.railway.app';
+  const files = getExtensionFiles(appBaseUrl);
   const selectedFile = files[selectedFileIndex] || files[0];
-  const bookmarkletCode = getBookmarkletCode(window.location.origin);
+  const bookmarkletCode = getBookmarkletCode(appBaseUrl);
 
   const handleDownloadZip = async () => {
     try {
       setIsDownloadingZip(true);
-      await downloadExtensionZip(window.location.origin);
+      await downloadExtensionZip(appBaseUrl);
     } catch (err) {
       console.error("Failed to generate zip", err);
     } finally {

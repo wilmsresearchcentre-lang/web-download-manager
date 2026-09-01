@@ -100,9 +100,6 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
         // If it's YouTube / Media stream with stream options
         if (result.isYouTube && result.streams && result.streams.length > 0) {
           setSelectedQuality(result.streams[0].quality || '1080p');
-          if (!url.includes('.mp4') && !url.includes('.mp3')) {
-            setUrl(result.streams[0].directUrl);
-          }
         }
       } catch (err) {
         console.error("Probe failed", err);
@@ -156,12 +153,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
   const handleProcessSubmit = (saveImmediately = true) => {
     if (!url.trim()) return;
 
-    let targetUrl = url.trim();
-    if (probeData?.streams && probeData.streams.length > 0 && (targetUrl.includes('youtube.com') || targetUrl.includes('youtu.be'))) {
-      targetUrl = probeData.streams[0].directUrl;
-    }
-
-    targetUrl = sanitizeWebUrl(targetUrl);
+    const targetUrl = sanitizeWebUrl(url.trim());
     const finalFilename = filename.trim() || extractFilenameFromUrl(targetUrl);
     const finalCategory = category === 'all' ? detectCategory(finalFilename) : category;
     const finalSize = probeData?.totalSize || 35000000;

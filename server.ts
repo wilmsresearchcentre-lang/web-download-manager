@@ -10,6 +10,9 @@ import { createServer as createViteServer } from "vite";
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = "0.0.0.0";
+const YTDLP_FORMAT = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best";
+const YTDLP_AUDIO_FORMAT = "bestaudio[ext=m4a]/bestaudio/best";
+const YTDLP_TIMEOUT_MS = Number(process.env.YTDLP_TIMEOUT_MS) || 120000;
 
 app.use(express.json());
 
@@ -110,6 +113,40 @@ function extractFilename(targetUrl: string, contentDisposition?: string): string
   return "download_file";
 }
 
+function isYtDlpTarget(targetUrl: string): boolean {
+  return /(?:youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com|tiktok\.com|soundcloud\.com|twitter\.com|x\.com)/i.test(targetUrl);
+}
+
+function getYtDlpProxy(): string | undefined {
+  const configuredUrl = process.env.PROXY_URL?.trim();
+  if (configuredUrl) return configuredUrl;
+
+  const server = (process.env.PROXY_SERVER || process.env.PROXY_IP || "").trim();
+  const port = (process.env.PROXY_PORT || "").trim();
+  if (!server || !port) return undefined;
+
+  const normalizedServer = server.includes("://") ? server : `http://${server}`;
+  try {
+    const proxyUrl = new URL(normalizedServer);
+    proxyUrl.port = port;
+    return proxyUrl.toString().replace(/\/$/, "");
+  } catch {
+    console.warn("Ignoring invalid proxy configuration");
+    return undefined;
+  }
+}
+
+function addYtDlpProxyArgs(args: string[]): string[] {
+  const proxy = getYtDlpProxy();
+  return proxy ? [...args, "--proxy", proxy] : args;
+}
+
+function addYtDlpTimeout(child: ReturnType<typeof spawn>): NodeJS.Timeout {
+  return setTimeout(() => {
+    if (!child.killed) child.kill("SIGTERM");
+  }, YTDLP_TIMEOUT_MS);
+}
+
 // Execute yt-dlp via yt-dlp-exec library with child_process fallback
 async function extractMediaInfoWithYtDlp(targetUrl: string): Promise<any> {
   // 1. Try yt-dlp-exec library
@@ -120,6 +157,7 @@ async function extractMediaInfoWithYtDlp(targetUrl: string): Promise<any> {
         noWarnings: true,
         noCheckCertificates: true,
         preferFreeFormats: true,
+        ...(getYtDlpProxy() ? { proxy: getYtDlpProxy() } : {}),
         extractorArgs: "youtube:player_client=android,ios,web"
       } as any);
 
@@ -133,14 +171,14 @@ async function extractMediaInfoWithYtDlp(targetUrl: string): Promise<any> {
 
   // 2. Direct binary spawn fallback
   return new Promise((resolve, reject) => {
-    const args = [
+    const args = addYtDlpProxyArgs([
       "--extractor-args",
       "youtube:player_client=android,ios,web",
       "--dump-single-json",
       "--no-warnings",
       "--no-check-certificates",
       targetUrl
-    ];
+    ]);
 
     const child = spawn("yt-dlp", args);
     let stdout = "";
@@ -186,6 +224,7 @@ async function getDirectStreamUrl(
         format: formatSelector,
         noWarnings: true,
         noCheckCertificates: true,
+        ...(getYtDlpProxy() ? { proxy: getYtDlpProxy() } : {}),
         extractorArgs: "youtube:player_client=android,ios,web"
       } as any);
 
@@ -200,7 +239,7 @@ async function getDirectStreamUrl(
 
   // 2. Fallback to child process
   return new Promise((resolve, reject) => {
-    const args = [
+    const args = addYtDlpProxyArgs([
       "--extractor-args",
       "youtube:player_client=android,ios,web",
       "-g",
@@ -209,7 +248,7 @@ async function getDirectStreamUrl(
       "--no-warnings",
       "--no-check-certificates",
       targetUrl
-    ];
+    ]);
 
     const child = spawn("yt-dlp", args);
     let stdout = "";
@@ -255,10 +294,7 @@ app.get("/api/probe", async (req, res) => {
     return;
   }
 
-  const isVideoPlatform =
-    /(?:youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com|tiktok\.com|soundcloud\.com|twitter\.com|x\.com)/i.test(
-      targetUrl
-    );
+  const isVideoPlatform = isYtDlpTarget(targetUrl);
 
   if (isVideoPlatform) {
     try {
@@ -539,32 +575,58 @@ app.get("/api/proxy-download", async (req, res) => {
     return;
   }
 
-  const isYouTube = /(?:youtube\.com|youtu\.be)/i.test(targetUrl);
+  const isYtDlpMedia = isYtDlpTarget(targetUrl);
+  const requestedFilename = typeof req.query.filename === "string" ? req.query.filename : "media_download.mp4";
+  const isAudioRequest = /\.(?:mp3|m4a|wav|opus|aac)$/i.test(requestedFilename);
 
   try {
-    let directStreamUrl = targetUrl;
+    // yt-dlp must merge separate video/audio streams before sending them to the browser.
+    if (isYtDlpMedia) {
+      const child = spawn("yt-dlp", addYtDlpProxyArgs([
+        "--no-playlist",
+        "--no-warnings",
+        "--no-check-certificates",
+        "--extractor-args",
+        "youtube:player_client=android,ios,web",
+        "--format",
+        isAudioRequest ? YTDLP_AUDIO_FORMAT : YTDLP_FORMAT,
+        "--merge-output-format",
+        "mp4",
+        "--output",
+        "-",
+        targetUrl
+      ]));
+      const timeoutId = addYtDlpTimeout(child);
 
-    // Agar YouTube link hai, toh asli video stream (mp4) nikalain
-    if (isYouTube) {
-      try {
-        if (typeof ytdl === "function") {
-          const info: any = await ytdl(targetUrl, {
-            dumpSingleJson: true,
-            format: "best[ext=mp4]/best",
-            noWarnings: true,
-            noCheckCertificates: true,
-            extractorArgs: "youtube:player_client=android,ios,web"
-          } as any);
-          if (info && info.url) {
-            directStreamUrl = info.url;
-          }
-        }
-      } catch (err: any) {
-        console.warn("Direct yt-dlp-exec extraction fallback:", err?.message);
-        const direct = await getDirectStreamUrl(targetUrl);
-        if (direct) directStreamUrl = direct;
-      }
+      let stderr = "";
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+
+      res.status(200);
+      res.setHeader("Content-Type", requestedFilename.toLowerCase().endsWith(".mp3") ? "audio/mpeg" : "video/mp4");
+      res.setHeader("Content-Disposition", `attachment; filename="${requestedFilename.replace(/["\\\r\n]/g, "_")}"`);
+      res.setHeader("Cache-Control", "no-store");
+
+      const closeChild = () => {
+        if (!child.killed) child.kill("SIGTERM");
+      };
+      req.on("close", closeChild);
+      child.on("error", (error) => {
+        if (!res.headersSent) res.status(500).json({ error: error.message });
+        else res.destroy(error);
+      });
+      child.on("close", (code) => {
+        clearTimeout(timeoutId);
+        req.off("close", closeChild);
+        if (code === 0) res.end();
+        else if (!res.destroyed) res.destroy(new Error(stderr.trim() || `yt-dlp exited with code ${code}`));
+      });
+      child.stdout.pipe(res);
+      return;
     }
+
+    const directStreamUrl = targetUrl;
 
     // Client (Frontend) se aane wala Range header
     const range = (req.headers.range as string) || (req.query.range as string);
